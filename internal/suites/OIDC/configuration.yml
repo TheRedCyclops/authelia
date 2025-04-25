@@ -76,7 +76,7 @@ identity_providers:
     clients:
       - client_id: 'oidc-tester-app'
         client_secret: '$pbkdf2-sha512$310000$EniFUo2z8Yjw3op3lrtuyA$xhopyOyffx2TqsQvEhoMSo1sxywIvJV8HZw/zdf62xtyryY/nkNkdcUV82r.xtd5NuyvZo7DPkOlcffM/Wvsmw'  # yamllint disable-line rule:line-length
-        authorization_policy: 'two_factor'
+        authorization_policy: 'one_factor'
         redirect_uris:
           - 'https://oidc.example.com:8080/oauth2/callback'
       - client_id: 'oidc-tester-app-public'
@@ -99,7 +99,7 @@ access_control:
     - domain: 'singlefactor.example.com'
       policy: 'one_factor'
     - domain: 'oidc.example.com'
-      policy: 'two_factor'
+      policy: 'one_factor'
     - domain: 'oidc-public.example.com'
       policy: 'bypass'
 ...

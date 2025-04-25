@@ -7,12 +7,23 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"strings"
+	"time"
 
+	"github.com/go-viper/mapstructure/v2"
+	"github.com/knadh/koanf/parsers/json"
+	"github.com/knadh/koanf/parsers/toml"
+	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
+	goyaml "gopkg.in/yaml.v3"
 
+	"github.com/authelia/authelia/v4/internal/configuration"
 	"github.com/authelia/authelia/v4/internal/configuration/schema"
+	"github.com/authelia/authelia/v4/internal/expression"
+	"github.com/authelia/authelia/v4/internal/model"
 	"github.com/authelia/authelia/v4/internal/utils"
 )
 
@@ -29,6 +40,7 @@ func newDebugCmd(ctx *CmdCtx) (cmd *cobra.Command) {
 
 	cmd.AddCommand(
 		newDebugTLSCmd(ctx),
+		newDebugExpressionCmd(ctx),
 	)
 
 	return cmd
@@ -54,6 +66,97 @@ func newDebugTLSCmd(ctx *CmdCtx) (cmd *cobra.Command) {
 	cmd.Flags().String("hostname", "", "overrides the hostname to use for the TLS connection which is usually extracted from the address")
 
 	return cmd
+}
+
+func newDebugExpressionCmd(ctx *CmdCtx) (cmd *cobra.Command) {
+	cmd = &cobra.Command{
+		Use:               "expression [file] [expression]",
+		Short:             "",
+		Long:              "",
+		Example:           "",
+		Args:              cobra.MinimumNArgs(2),
+		RunE:              ctx.DebugExpressionRunE,
+		DisableAutoGenTag: true,
+	}
+
+	return cmd
+}
+
+func (ctx *CmdCtx) LoadUserFile(filepath string) (user *model.User, err error) {
+	k := koanf.NewWithConf(koanf.Conf{Delim: ".", StrictMerge: false})
+
+	switch ext := path.Ext(filepath); ext {
+	case ".yml", ".yaml":
+		if err = k.Load(file.Provider(filepath), yaml.Parser()); err != nil {
+			return nil, fmt.Errorf("error occurred loading user file: %w", err)
+		}
+	case ".tml", ".toml":
+		if err = k.Load(file.Provider(filepath), toml.Parser()); err != nil {
+			return nil, fmt.Errorf("error occurred loading user file: %w", err)
+		}
+	case ".json":
+		if err = k.Load(file.Provider(filepath), json.Parser()); err != nil {
+			return nil, fmt.Errorf("error occurred loading user file: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("the extension '%s' is unknown", ext)
+	}
+
+	user = &model.User{}
+
+	c := koanf.UnmarshalConf{
+		DecoderConfig: &mapstructure.DecoderConfig{
+			DecodeHook:       configuration.DecodeHooksComposeDefinitions(),
+			Metadata:         nil,
+			Result:           user,
+			WeaklyTypedInput: true,
+		},
+	}
+
+	if err = k.UnmarshalWithConf("", user, c); err != nil {
+		return nil, fmt.Errorf("error occurred unmarshalling user: %w", err)
+	}
+
+	return user, nil
+}
+
+func (ctx *CmdCtx) DebugExpressionRunE(_ *cobra.Command, args []string) (err error) {
+	user, err := ctx.LoadUserFile(args[0])
+	if err != nil {
+		return err
+	}
+
+	exp := strings.Join(args[1:], " ")
+
+	provider := expression.NewUserAttributes(&schema.Configuration{
+		AuthenticationBackend: schema.AuthenticationBackend{File: &schema.AuthenticationBackendFile{}},
+		Definitions: schema.Definitions{
+			UserAttributes: map[string]schema.UserAttribute{
+				"example": {
+					Expression: exp,
+				},
+			},
+		},
+	})
+
+	if err = provider.StartupCheck(); err != nil {
+		return err
+	}
+
+	resolved, found := provider.Resolve("example", user, time.Now())
+
+	if !found {
+		return fmt.Errorf("expression '%s' did not resolve", exp)
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "Resolved: %s\n", resolved)
+
+	return nil
+}
+
+func (ctx *CmdCtx) DebugClaims(cmd *cobra.Command, _ []string) (err error) {
+
+	return nil
 }
 
 //nolint:gocyclo
@@ -231,7 +334,7 @@ func (ctx *CmdCtx) DebugTLSRunE(cmd *cobra.Command, args []string) (err error) {
 		c.TLS.ServerName = hostnameOverride
 	}
 
-	data, err := yaml.Marshal(&c)
+	data, err := goyaml.Marshal(&c)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stdout, "\nError marshaling suggested config: %v\n", err)
 	} else {
